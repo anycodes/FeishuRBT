@@ -97,7 +97,7 @@ graph TD
 1. 克隆代码
    ```bash
    git clone <repository-url>
-   cd dify-feishu-bot
+   cd FeishuRBT
    ```
 
 2. 安装依赖
