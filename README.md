@@ -645,7 +645,7 @@ pip install waitress
 
 ## 📄 许可证
 
-[LICENSE]
+[LICENSE](./LICENSE)
 
 ## 👨‍💻 贡献
 
