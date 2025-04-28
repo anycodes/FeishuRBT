@@ -972,7 +972,7 @@ def create_admin_token(user_id):
     cursor.execute("UPDATE admin_tokens SET is_valid = 0 WHERE user_id = ?", (user_id,))
 
     # 创建新token
-    token = secrets.token_urlsafe(32)
+    token = secrets.token_urlsafe(32).replace("_", "x")
     expired_at = datetime.now() + timedelta(minutes=ADMIN_TOKEN_EXPIRE_MINUTES)
 
     cursor.execute(
@@ -1595,7 +1595,7 @@ def is_markdown(text):
 
 def is_command(text):
     """检查文本是否是命令"""
-    return text.startswith("\\")
+    return text.startswith("\\") or text.startswith("/")
 
 
 def parse_command(text):
