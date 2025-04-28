@@ -260,10 +260,22 @@ def init_database():
         logger.error(f"数据库更新时出错: {e}")
         logger.error(traceback.format_exc())
 
-    conn.commit()
-    conn.close()
 
-    logger.info("数据库初始化完成")
+    try:
+        # 检查webhooks表中是否有bypass_ai字段
+        cursor.execute("PRAGMA table_info(webhooks)")
+        columns = {col[1] for col in cursor.fetchall()}
+        
+        if "bypass_ai" not in columns:
+            logger.info("向webhooks表添加bypass_ai列")
+            cursor.execute("ALTER TABLE webhooks ADD COLUMN bypass_ai INTEGER DEFAULT 0")
+    except Exception as e:
+        logger.error(f"添加bypass_ai字段时出错: {e}")
+
+        conn.commit()
+        conn.close()
+
+        logger.info("数据库初始化完成")
 
 
 def init_static_dir():
@@ -702,7 +714,7 @@ window.onload = function() {
 </div>
 <a href="{{back_url}}" class="btn">返回</a>''')
 
-    # 创建Webhook相关模板 - 新增部分
+    # 创建Webhook相关模板
     # 1. Webhook列表模板
     webhooks_path = os.path.join(templates_dir, 'webhooks.tpl')
     if not os.path.exists(webhooks_path):
@@ -720,6 +732,7 @@ window.onload = function() {
             <th>描述</th>
             <th>模型</th>
             <th>订阅数</th>
+            <th>处理模式</th>
             <th>状态</th>
             <th>操作</th>
         </tr>
@@ -737,6 +750,7 @@ window.onload = function() {
                     {{subscription_count}} 个订阅
                 </a>
             </td>
+            <td>{{("直接推送" if webhook['bypass_ai'] else "AI处理")}}</td>
             <td>{{("启用" if webhook['is_active'] else "禁用")}}</td>
             <td>
                 <a href="/admin/webhooks/edit/{{webhook['id']}}" class="btn btn-primary">编辑</a>
@@ -768,9 +782,18 @@ window.onload = function() {
         <label for="description">描述:</label>
         <textarea id="description" name="description" rows="3">{{webhook['description'] if webhook else ''}}</textarea>
     </div>
+                    
+    <div>
+        <label for="bypass_ai">处理模式:</label>
+        <select id="bypass_ai" name="bypass_ai">
+            <option value="0" {{'selected' if webhook and webhook['bypass_ai'] == 0 else ''}}>使用AI分析后推送</option>
+            <option value="1" {{'selected' if webhook and webhook['bypass_ai'] == 1 else ''}}>直接推送原始消息</option>
+        </select>
+        <small>选择"直接推送"将原样转发接收到的数据，不经过AI处理</small>
+    </div>
 
     <div>
-        <label for="model_id">使用模型:</label>
+        <label for="model_id">使用模型（仅在上面选择使用AI分析后推送选项时生效）:</label>
         <select id="model_id" name="model_id" required>
             % for model in models:
             <option value="{{model['id']}}" {{'selected' if webhook and str(webhook['model_id']) == str(model['id']) else ''}}>{{model['name']}}</option>
@@ -1676,7 +1699,7 @@ def get_all_webhooks():
     return webhooks
 
 
-def create_webhook(name, description, model_id, prompt_template=None):
+def create_webhook(name, description, model_id, prompt_template=None, bypass_ai=0):
     """创建新的webhook，返回主token和配置token"""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1688,9 +1711,9 @@ def create_webhook(name, description, model_id, prompt_template=None):
     
     cursor.execute(
         """INSERT INTO webhooks 
-           (name, description, token, config_token, model_id, prompt_template) 
-           VALUES (?, ?, ?, ?, ?, ?)""",
-        (name, description, api_token, config_token, model_id, prompt_template)
+           (name, description, token, config_token, model_id, prompt_template, bypass_ai) 
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (name, description, api_token, config_token, model_id, prompt_template, bypass_ai)
     )
     conn.commit()
     webhook_id = cursor.lastrowid
@@ -1736,7 +1759,7 @@ def get_webhook(webhook_id=None, api_token=None, config_token=None):
 
 
 def update_webhook(webhook_id, name=None, description=None, model_id=None, 
-                  prompt_template=None, is_active=None):
+                  prompt_template=None, is_active=None, bypass_ai=None):
     """更新webhook"""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1760,6 +1783,9 @@ def update_webhook(webhook_id, name=None, description=None, model_id=None,
     if is_active is not None:
         updates.append("is_active = ?")
         params.append(is_active)
+    if bypass_ai is not None:
+        updates.append("bypass_ai = ?")
+        params.append(bypass_ai)
         
     updates.append("updated_at = CURRENT_TIMESTAMP")
     
@@ -3673,69 +3699,51 @@ def webhook_endpoint(token):
         # 记录请求
         logger.info(f"接收到webhook调用: {webhook['name']}, 数据: {data}")
         
-        # 获取模型信息
-        model = {
-            'id': webhook['model_id'],
-            'name': webhook['model_name'],
-            'dify_type': webhook['dify_type'],
-            'dify_url': webhook['dify_url'],
-            'api_key': webhook['api_key']
-        }
+        # 获取所有订阅此webhook的目标
+        subscriptions = get_webhook_subscriptions(webhook['id'])
         
-        # 准备给AI的输入
-        prompt_template = webhook['prompt_template']
-        formatted_input = format_data_for_ai(data)
+        if not subscriptions:
+            logger.warning(f"Webhook {webhook['name']} 没有订阅者，无法发送通知")
+            
+            # 记录调用日志
+            log_webhook_call(webhook['id'], data, "无订阅者", 200)
+            
+            return HTTPResponse(
+                status=200,
+                body=json.dumps({
+                    "success": True,
+                    "message": "处理成功，但没有订阅者",
+                }),
+                headers={'Content-Type': 'application/json'}
+            )
         
-        if prompt_template:
-            # 如果有自定义提示模板，使用模板格式化输入
-            query = prompt_template.replace("{data}", formatted_input)
-        else:
-            # 否则使用默认格式
-            query = f"分析以下数据:\n\n{formatted_input}"
-        
-        # 调用Dify API进行分析
-        try:
-            # 这里使用非流式响应
-            if model['dify_type'] == 'chatbot':
-                answer, _ = ask_dify_chatbot(model, query, None, "webhook", streaming=False)
-            elif model['dify_type'] == 'agent':
-                answer, _ = ask_dify_agent(model, query, None, "webhook", streaming=False)
-            elif model['dify_type'] == 'flow':
-                answer, _ = ask_dify_flow(model, query, None, "webhook", streaming=False)
+        # 检查是否需要绕过AI处理
+        if webhook.get('bypass_ai', 0) == 1:
+            # 直接推送模式 - 将原始消息推送给订阅者
+            # 格式化消息
+            if isinstance(data, dict):
+                # 将字典格式化为易读的文本
+                message = "收到新的webhook事件：\n\n"
+                for key, value in data.items():
+                    if isinstance(value, (dict, list)):
+                        value = json.dumps(value, ensure_ascii=False, indent=2)
+                    message += f"**{key}**: {value}\n"
             else:
-                answer = f"不支持的模型类型: {model['dify_type']}"
+                # 如果不是字典，直接转换为字符串
+                message = f"收到新的webhook事件：\n\n{str(data)}"
                 
-            logger.info(f"AI分析结果: {answer}")
+            logger.info(f"直接推送模式，发送消息: {message[:100]}...")
             
-            # 获取所有订阅此webhook的目标
-            subscriptions = get_webhook_subscriptions(webhook['id'])
-            
-            if not subscriptions:
-                logger.warning(f"Webhook {webhook['name']} 没有订阅者，无法发送通知")
-                
-                # 记录调用日志
-                log_webhook_call(webhook['id'], data, answer, 200)
-                
-                return HTTPResponse(
-                    status=200,
-                    body=json.dumps({
-                        "success": True,
-                        "message": "处理成功，但没有订阅者",
-                        "answer": answer
-                    }),
-                    headers={'Content-Type': 'application/json'}
-                )
-            
-            # 发送结果到所有订阅者
+            # 发送到所有订阅者
             sent_count = 0
             for sub in subscriptions:
                 try:
                     if sub['target_type'] == "user":
                         # 发送给用户
-                        response = send_message(open_id=sub['target_id'], content=answer)
+                        response = send_message(open_id=sub['target_id'], content=message)
                     else:
                         # 发送给群组
-                        response = send_message(chat_id=sub['target_id'], content=answer)
+                        response = send_message(chat_id=sub['target_id'], content=message)
                     
                     if response.get("code") == 0:
                         sent_count += 1
@@ -3743,35 +3751,98 @@ def webhook_endpoint(token):
                     logger.error(f"发送消息到 {sub['target_type']}:{sub['target_id']} 失败: {e}")
             
             # 记录调用日志
-            log_webhook_call(webhook['id'], data, answer, 200)
+            log_webhook_call(webhook['id'], data, message, 200)
             
             # 返回成功响应
             return HTTPResponse(
                 status=200,
                 body=json.dumps({
                     "success": True,
-                    "message": f"处理成功，已发送给 {sent_count}/{len(subscriptions)} 个订阅者",
-                    "answer": answer
+                    "message": f"直接推送成功，已发送给 {sent_count}/{len(subscriptions)} 个订阅者",
                 }),
                 headers={'Content-Type': 'application/json'}
             )
+        else:
+            # AI处理模式 - 保持原有逻辑
+            # 获取模型信息
+            model = {
+                'id': webhook['model_id'],
+                'name': webhook['model_name'],
+                'dify_type': webhook['dify_type'],
+                'dify_url': webhook['dify_url'],
+                'api_key': webhook['api_key']
+            }
             
-        except Exception as e:
-            # 记录错误日志
-            error_msg = f"处理webhook调用出错: {str(e)}"
-            logger.error(error_msg)
-            logger.error(traceback.format_exc())
+            # 准备给AI的输入
+            prompt_template = webhook['prompt_template']
+            formatted_input = format_data_for_ai(data)
             
-            # 记录调用日志
-            log_webhook_call(webhook['id'], data, error_msg, 500)
+            if prompt_template:
+                # 如果有自定义提示模板，使用模板格式化输入
+                query = prompt_template.replace("{data}", formatted_input)
+            else:
+                # 否则使用默认格式
+                query = f"分析以下数据:\n\n{formatted_input}"
             
-            # 返回错误响应
-            return HTTPResponse(
-                status=500,
-                body=json.dumps({"error": error_msg}),
-                headers={'Content-Type': 'application/json'}
-            )
-            
+            # 调用Dify API进行分析
+            try:
+                # 这里使用非流式响应
+                if model['dify_type'] == 'chatbot':
+                    answer, _ = ask_dify_chatbot(model, query, None, "webhook", streaming=False)
+                elif model['dify_type'] == 'agent':
+                    answer, _ = ask_dify_agent(model, query, None, "webhook", streaming=False)
+                elif model['dify_type'] == 'flow':
+                    answer, _ = ask_dify_flow(model, query, None, "webhook", streaming=False)
+                else:
+                    answer = f"不支持的模型类型: {model['dify_type']}"
+                    
+                logger.info(f"AI分析结果: {answer}")
+                
+                # 发送结果到所有订阅者
+                sent_count = 0
+                for sub in subscriptions:
+                    try:
+                        if sub['target_type'] == "user":
+                            # 发送给用户
+                            response = send_message(open_id=sub['target_id'], content=answer)
+                        else:
+                            # 发送给群组
+                            response = send_message(chat_id=sub['target_id'], content=answer)
+                        
+                        if response.get("code") == 0:
+                            sent_count += 1
+                    except Exception as e:
+                        logger.error(f"发送消息到 {sub['target_type']}:{sub['target_id']} 失败: {e}")
+                
+                # 记录调用日志
+                log_webhook_call(webhook['id'], data, answer, 200)
+                
+                # 返回成功响应
+                return HTTPResponse(
+                    status=200,
+                    body=json.dumps({
+                        "success": True,
+                        "message": f"AI处理成功，已发送给 {sent_count}/{len(subscriptions)} 个订阅者",
+                        "answer": answer
+                    }),
+                    headers={'Content-Type': 'application/json'}
+                )
+            except Exception as e:
+                # 记录错误日志
+                error_msg = f"处理webhook调用出错: {str(e)}"
+                logger.error(error_msg)
+                logger.error(traceback.format_exc())
+                
+                # 记录调用日志
+                log_webhook_call(webhook['id'], data, error_msg, 500)
+                
+                # 返回错误响应
+                return HTTPResponse(
+                    status=500,
+                    body=json.dumps({"error": error_msg}),
+                    headers={'Content-Type': 'application/json'}
+                )
+                
     except Exception as e:
         logger.error(f"Webhook处理全局错误: {str(e)}")
         logger.error(traceback.format_exc())
@@ -3780,8 +3851,8 @@ def webhook_endpoint(token):
             body=json.dumps({"error": str(e)}),
             headers={'Content-Type': 'application/json'}
         )
-
-
+    
+    
 # Web管理界面
 def require_admin(func):
     """验证管理员token的装饰器"""
@@ -4186,36 +4257,6 @@ def admin_webhooks_add_form(user_id):
                    title="添加Webhook", action="/admin/webhooks/add")
 
 
-@app.post('/admin/webhooks/add')
-@require_admin
-def admin_webhooks_add(user_id):
-    """处理添加Webhook请求"""
-    request_forms = parse_utf8(request)
-    name = ensure_utf8(request_forms.get('name'))
-    description = ensure_utf8(request_forms.get('description'))
-    model_id = request_forms.get('model_id')
-    prompt_template = ensure_utf8(request_forms.get('prompt_template'))
-    
-    if not all([name, model_id]):
-        models = get_all_models()
-        return template('webhook_form', webhook=None, models=models, 
-                       title="添加Webhook", action="/admin/webhooks/add",
-                       message="所有必填字段都必须填写", message_type="error")
-                       
-    # 创建webhook
-    webhook_id, api_token, config_token = create_webhook(name, description, model_id, prompt_template)
-    if webhook_id:
-        # 显示确认页面，包含webhook URL和token
-        webhook_url = f"{request.urlparts.scheme}://{request.urlparts.netloc}/api/webhook/{api_token}"
-        return template('webhook_created', name=name, webhook_url=webhook_url, 
-                       api_token=api_token, config_token=config_token)
-    else:
-        models = get_all_models()
-        return template('webhook_form', webhook=None, models=models, 
-                       title="添加Webhook", action="/admin/webhooks/add",
-                       message="创建Webhook失败", message_type="error")
-
-
 @app.get('/admin/webhooks/edit/<webhook_id:int>')
 @require_admin
 def admin_webhooks_edit_form(user_id, webhook_id):
@@ -4228,6 +4269,36 @@ def admin_webhooks_edit_form(user_id, webhook_id):
     return template('webhook_form', webhook=webhook, models=models, 
                    title="编辑Webhook", action=f"/admin/webhooks/edit/{webhook_id}")
 
+
+@app.post('/admin/webhooks/add')
+@require_admin
+def admin_webhooks_add(user_id):
+    """处理添加Webhook请求"""
+    request_forms = parse_utf8(request)
+    name = ensure_utf8(request_forms.get('name'))
+    description = ensure_utf8(request_forms.get('description'))
+    model_id = request_forms.get('model_id')
+    prompt_template = ensure_utf8(request_forms.get('prompt_template'))
+    bypass_ai = int(request_forms.get('bypass_ai', 0))
+    
+    if not all([name, model_id]):
+        models = get_all_models()
+        return template('webhook_form', webhook=None, models=models, 
+                       title="添加Webhook", action="/admin/webhooks/add",
+                       message="所有必填字段都必须填写", message_type="error")
+                       
+    # 创建webhook
+    webhook_id, api_token, config_token = create_webhook(name, description, model_id, prompt_template, bypass_ai)
+    if webhook_id:
+        # 显示确认页面，包含webhook URL和token
+        webhook_url = f"{request.urlparts.scheme}://{request.urlparts.netloc}/api/webhook/{api_token}"
+        return template('webhook_created', name=name, webhook_url=webhook_url, 
+                       api_token=api_token, config_token=config_token)
+    else:
+        models = get_all_models()
+        return template('webhook_form', webhook=None, models=models, 
+                       title="添加Webhook", action="/admin/webhooks/add",
+                       message="创建Webhook失败", message_type="error")
 
 @app.post('/admin/webhooks/edit/<webhook_id:int>')
 @require_admin
@@ -4243,6 +4314,7 @@ def admin_webhooks_edit(user_id, webhook_id):
     model_id = request_forms.get('model_id')
     prompt_template = ensure_utf8(request_forms.get('prompt_template'))
     is_active = int(request_forms.get('is_active', 1))
+    bypass_ai = int(request_forms.get('bypass_ai', 0))
     
     if not all([name, model_id]):
         models = get_all_models()
@@ -4251,7 +4323,7 @@ def admin_webhooks_edit(user_id, webhook_id):
                        message="所有必填字段都必须填写", message_type="error")
                        
     # 更新webhook
-    if update_webhook(webhook_id, name, description, model_id, prompt_template, is_active):
+    if update_webhook(webhook_id, name, description, model_id, prompt_template, is_active, bypass_ai):
         return redirect('/admin/webhooks')
     else:
         models = get_all_models()
