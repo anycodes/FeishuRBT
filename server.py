@@ -2557,15 +2557,13 @@ def handle_webhook_list(reply_func):
         return
     
     reply_text = "## 可用的Webhook事件\n\n"
-    i = 1
     for webhook in webhooks:
         status = "启用" if webhook['is_active'] == 1 else "禁用"
-        reply_text += f"### ({i}) {webhook['name']} ({status})\n"
+        reply_text += f"### ({webhook['id']}) {webhook['name']} ({status})\n"
         if webhook['description']:
             reply_text += f"{webhook['description']}\n"
         reply_text += f"- 订阅令牌: `{webhook['config_token']}`\n"
         reply_text += f"- 订阅命令: `\\subscribe-event {webhook['config_token']}`\n\n"
-        i = i + 1
     reply_func(reply_text)
 
 
@@ -2912,7 +2910,7 @@ def handle_model_info(args, reply_func):
         reply_func(f"未找到名为 '{model_name}' 的模型。")
         return
 
-    reply_text = f"## 模型：{model['name']}\n\n"
+    reply_text = f"## （{model['id']}）模型：{model['name']}\n\n"
     reply_text += f"- **描述**：{model['description']}\n"
     reply_text += f"- **类型**：{model['dify_type']}\n"
     reply_text += f"- **API地址**：{model['dify_url']}\n"
