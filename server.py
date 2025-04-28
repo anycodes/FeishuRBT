@@ -87,7 +87,6 @@ def parse_utf8(request):
     return form_data
 
 
-# 初始化数据库
 def init_database():
     """初始化SQLite数据库"""
     conn = sqlite3.connect(DB_PATH)
@@ -146,39 +145,19 @@ def init_database():
     )
     ''')
 
-    # 会话表 - 添加最后活动时间和状态字段
+    # 会话表 - 基础结构
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS sessions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT NOT NULL,
         model_id INTEGER,
-        command_id INTEGER DEFAULT NULL,
         conversation_id TEXT,
+        created_at
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        last_active_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        is_active INTEGER DEFAULT 1,
-        FOREIGN KEY (model_id) REFERENCES models (id),
-        FOREIGN KEY (command_id) REFERENCES commands (id)
+        FOREIGN KEY (model_id) REFERENCES models (id)
     )
     ''')
-
-    # 尝试添加新列到现有表中（如果表已存在）
-    try:
-        # 检查是否需要添加新列
-        cursor.execute("PRAGMA table_info(sessions)")
-        columns = {col[1] for col in cursor.fetchall()}
-
-        if "last_active_at" not in columns:
-            cursor.execute("ALTER TABLE sessions ADD COLUMN last_active_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
-
-        if "is_active" not in columns:
-            cursor.execute("ALTER TABLE sessions ADD COLUMN is_active INTEGER DEFAULT 1")
-
-        if "command_id" not in columns:
-            cursor.execute("ALTER TABLE sessions ADD COLUMN command_id INTEGER DEFAULT NULL")
-    except Exception as e:
-        logger.error(f"添加新列时出错: {e}")
 
     # 消息记录表
     cursor.execute('''
@@ -209,18 +188,85 @@ def init_database():
     # 创建默认配置
     cursor.execute("INSERT OR IGNORE INTO configs (key, value, description) VALUES (?, ?, ?)",
                    ("default_model", "", "默认使用的模型ID"))
-
+    
     # 添加会话超时配置（分钟）
     cursor.execute("INSERT OR IGNORE INTO configs (key, value, description) VALUES (?, ?, ?)",
-                   ("session_timeout", "30", "会话超时时间（分钟）"))
+                  ("session_timeout", "30", "会话超时时间（分钟）"))
+
+    # 向后兼容性处理 - 动态检查和添加列/表
+    try:
+        # ---------- 处理sessions表 ----------
+        # 检查是否需要添加新列
+        cursor.execute("PRAGMA table_info(sessions)")
+        columns = {col[1] for col in cursor.fetchall()}
+        
+        if "last_active_at" not in columns:
+            logger.info("向sessions表添加last_active_at列")
+            cursor.execute("ALTER TABLE sessions ADD COLUMN last_active_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        
+        if "is_active" not in columns:
+            logger.info("向sessions表添加is_active列")
+            cursor.execute("ALTER TABLE sessions ADD COLUMN is_active INTEGER DEFAULT 1")
+            
+        if "command_id" not in columns:
+            logger.info("向sessions表添加command_id列")
+            cursor.execute("ALTER TABLE sessions ADD COLUMN command_id INTEGER DEFAULT NULL")
+            
+        # ---------- 创建新的webhook相关表 ----------
+        # Webhook表
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS webhooks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            description TEXT,
+            token TEXT UNIQUE NOT NULL,
+            config_token TEXT UNIQUE NOT NULL,
+            model_id INTEGER,
+            prompt_template TEXT,
+            is_active INTEGER DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (model_id) REFERENCES models (id)
+        )
+        ''')
+        
+        # Webhook订阅表
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS webhook_subscriptions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            webhook_id INTEGER NOT NULL,
+            target_type TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            created_by TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (webhook_id) REFERENCES webhooks (id),
+            UNIQUE(webhook_id, target_type, target_id)
+        )
+        ''')
+        
+        # Webhook调用日志表
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS webhook_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            webhook_id INTEGER,
+            request_data TEXT,
+            response TEXT,
+            status INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (webhook_id) REFERENCES webhooks (id)
+        )
+        ''')
+            
+    except Exception as e:
+        logger.error(f"数据库更新时出错: {e}")
+        logger.error(traceback.format_exc())
 
     conn.commit()
     conn.close()
 
     logger.info("数据库初始化完成")
+    
 
-
-# 初始化静态文件目录
 def init_static_dir():
     """初始化静态文件目录"""
     os.makedirs(STATIC_DIR, exist_ok=True)
@@ -285,6 +331,12 @@ def init_static_dir():
             .btn-primary {
                 background-color: #2196F3;
             }
+            .btn-warning {
+                background-color: #ff9800;
+            }
+            .btn-info {
+                background-color: #00bcd4;
+            }
             form {
                 margin-top: 20px;
             }
@@ -299,6 +351,56 @@ def init_static_dir():
             }
             label {
                 font-weight: bold;
+            }
+            .card {
+                background-color: white;
+                border-radius: 5px;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                padding: 15px;
+                margin-bottom: 20px;
+            }
+            .alert {
+                padding: 10px 15px;
+                border-radius: 4px;
+                margin-bottom: 15px;
+            }
+            .alert-success {
+                background-color: #d4edda;
+                color: #155724;
+                border: 1px solid #c3e6cb;
+            }
+            .alert-info {
+                background-color: #d1ecf1;
+                color: #0c5460;
+                border: 1px solid #bee5eb;
+            }
+            .alert-warning {
+                background-color: #fff3cd;
+                color: #856404;
+                border: 1px solid #ffeeba;
+            }
+            .alert-error {
+                background-color: #f8d7da;
+                color: #721c24;
+                border: 1px solid #f5c6cb;
+            }
+            .log-content {
+                max-height: 150px;
+                max-width: 300px;
+                overflow: auto;
+                white-space: pre-wrap;
+                font-family: monospace;
+                font-size: 12px;
+                background-color: #f5f5f5;
+                padding: 5px;
+                border-radius: 3px;
+            }
+            .code-display {
+                font-family: monospace;
+                background-color: #f5f5f5;
+                padding: 10px;
+                border-radius: 4px;
+                margin-bottom: 10px;
             }
             ''')
 
@@ -332,6 +434,7 @@ def create_base_templates(templates_dir):
         <nav>
             <a href="/admin/models" class="btn">模型管理</a>
             <a href="/admin/commands" class="btn">命令管理</a>
+            <a href="/admin/webhooks" class="btn">Webhook管理</a>
             <a href="/admin/config" class="btn">系统配置</a>
             <a href="/admin/users" class="btn">用户管理</a>
             <a href="/admin/logs" class="btn">日志查看</a>
@@ -595,6 +698,353 @@ window.onload = function() {
 </div>
 <a href="{{back_url}}" class="btn">返回</a>''')
 
+    # 创建Webhook相关模板 - 新增部分
+    # 1. Webhook列表模板
+    webhooks_path = os.path.join(templates_dir, 'webhooks.tpl')
+    if not os.path.exists(webhooks_path):
+        with open(webhooks_path, 'w', encoding='utf-8') as f:
+            f.write('''% rebase('layout.tpl', title='Webhook管理')
+<h2>Webhook管理</h2>
+<p>Webhook允许外部系统调用机器人并将消息推送给订阅者。</p>
+<a href="/admin/webhooks/add" class="btn">添加Webhook</a>
+
+<table>
+    <thead>
+        <tr>
+            <th>ID</th>
+            <th>名称</th>
+            <th>描述</th>
+            <th>模型</th>
+            <th>订阅数</th>
+            <th>状态</th>
+            <th>操作</th>
+        </tr>
+    </thead>
+    <tbody>
+        % for webhook in webhooks:
+        <tr>
+            <td>{{webhook['id']}}</td>
+            <td>{{webhook['name']}}</td>
+            <td>{{webhook['description'] or '-'}}</td>
+            <td>{{webhook['model_name']}}</td>
+            <td>
+                % subscription_count = len(get_webhook_subscriptions(webhook['id']))
+                <a href="/admin/webhooks/subscriptions/{{webhook['id']}}">
+                    {subscription_count} 个订阅
+                </a>
+            </td>
+            <td>{{("启用" if webhook['is_active'] else "禁用")}}</td>
+            <td>
+                <a href="/admin/webhooks/edit/{{webhook['id']}}" class="btn btn-primary">编辑</a>
+                <a href="/admin/webhooks/regenerate-token/{{webhook['id']}}?type=api" class="btn btn-warning" onclick="return confirm('确定要重新生成API Token吗？旧的Token将立即失效！')">重新生成API Token</a>
+                <a href="/admin/webhooks/regenerate-token/{{webhook['id']}}?type=config" class="btn btn-warning" onclick="return confirm('确定要重新生成配置Token吗？用户将需要重新订阅！')">重新生成配置Token</a>
+                <a href="/admin/webhook-logs/{{webhook['id']}}" class="btn btn-info">查看日志</a>
+                <a href="/admin/webhooks/delete/{{webhook['id']}}" class="btn btn-danger" onclick="return confirm('确定要删除吗？这将删除所有相关订阅！')">删除</a>
+            </td>
+        </tr>
+        % end
+    </tbody>
+</table>''')
+
+    # 2. Webhook表单模板
+    webhook_form_path = os.path.join(templates_dir, 'webhook_form.tpl')
+    if not os.path.exists(webhook_form_path):
+        with open(webhook_form_path, 'w', encoding='utf-8') as f:
+            f.write('''% rebase('layout.tpl', title=title)
+<h2>{{title}}</h2>
+<a href="/admin/webhooks" class="btn">返回列表</a>
+
+<form action="{{action}}" method="post">
+    <div>
+        <label for="name">Webhook名称:</label>
+        <input type="text" id="name" name="name" value="{{webhook['name'] if webhook else ''}}" required>
+    </div>
+
+    <div>
+        <label for="description">描述:</label>
+        <textarea id="description" name="description" rows="3">{{webhook['description'] if webhook else ''}}</textarea>
+    </div>
+
+    <div>
+        <label for="model_id">使用模型:</label>
+        <select id="model_id" name="model_id" required>
+            % for model in models:
+            <option value="{{model['id']}}" {{'selected' if webhook and str(webhook['model_id']) == str(model['id']) else ''}}>{{model['name']}}</option>
+            % end
+        </select>
+    </div>
+
+    <div>
+        <label for="prompt_template">提示词模板(可选):</label>
+        <textarea id="prompt_template" name="prompt_template" rows="5" placeholder="在此编写提示词模板，使用{data}表示接收到的数据。例如：请分析以下数据并提炼关键信息：{data}">{{webhook['prompt_template'] if webhook else ''}}</textarea>
+        <small>如果不填写，将使用默认模板：分析以下数据:\n\n{data}</small>
+    </div>
+
+    % if webhook:
+    <div>
+        <label for="is_active">状态:</label>
+        <select id="is_active" name="is_active">
+            <option value="1" {{'selected' if webhook and webhook['is_active'] == 1 else ''}}>启用</option>
+            <option value="0" {{'selected' if webhook and webhook['is_active'] == 0 else ''}}>禁用</option>
+        </select>
+    </div>
+    
+    <div>
+        <label>配置Token:</label>
+        <div class="code-display">{{webhook['config_token']}}</div>
+        <small>用户使用此Token订阅，命令：\subscribe-event {{webhook['config_token']}}</small>
+    </div>
+    % end
+
+    <div>
+        <button type="submit" class="btn btn-primary">保存</button>
+    </div>
+</form>
+
+<style>
+.code-display {
+    font-family: monospace;
+    background-color: #f5f5f5;
+    padding: 10px;
+    border-radius: 4px;
+    margin-bottom: 10px;
+}
+</style>''')
+
+    # 3. Webhook创建成功模板
+    webhook_created_path = os.path.join(templates_dir, 'webhook_created.tpl')
+    if not os.path.exists(webhook_created_path):
+        with open(webhook_created_path, 'w', encoding='utf-8') as f:
+            f.write('''% rebase('layout.tpl', title='Webhook创建成功')
+<h2>Webhook创建成功</h2>
+
+<div class="alert alert-success">
+    <p>您的Webhook「{{name}}」已成功创建！</p>
+</div>
+
+<div class="card">
+    <h3>Webhook URL (API Token)</h3>
+    <p><code>{{webhook_url}}</code></p>
+    <p>外部系统使用此URL发送请求</p>
+    <button class="btn" onclick="copyToClipboard('{{webhook_url}}')">复制URL</button>
+</div>
+
+<div class="card">
+    <h3>API Token</h3>
+    <p><code>{{api_token}}</code></p>
+    <p class="alert alert-warning">请保存此Token！出于安全考虑，此Token仅会显示一次。</p>
+    <button class="btn" onclick="copyToClipboard('{{api_token}}')">复制Token</button>
+</div>
+
+<div class="card">
+    <h3>配置Token (订阅用)</h3>
+    <p><code>{{config_token}}</code></p>
+    <p>用户使用此Token订阅webhook通知</p>
+    <div class="alert alert-info">
+        订阅命令: <code>\subscribe-event {{config_token}}</code>
+    </div>
+    <button class="btn" onclick="copyToClipboard('{{config_token}}')">复制Token</button>
+</div>
+
+<p>
+    <a href="/admin/webhooks" class="btn">返回Webhook列表</a>
+</p>
+
+<script>
+function copyToClipboard(text) {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand('copy');
+    document.body.removeChild(textarea);
+    alert('已复制到剪贴板');
+}
+</script>''')
+
+    # 4. API Token重新生成模板
+    webhook_api_token_regenerated_path = os.path.join(templates_dir, 'webhook_api_token_regenerated.tpl')
+    if not os.path.exists(webhook_api_token_regenerated_path):
+        with open(webhook_api_token_regenerated_path, 'w', encoding='utf-8') as f:
+            f.write('''% rebase('layout.tpl', title='API Token已重新生成')
+<h2>API Token已重新生成</h2>
+
+<div class="alert alert-success">
+    <p>Webhook「{{name}}」的API Token已成功重新生成！</p>
+    <p>旧的API Token已失效，请更新所有使用此Webhook的外部系统。</p>
+</div>
+
+<div class="card">
+    <h3>新的Webhook URL</h3>
+    <p><code>{{webhook_url}}</code></p>
+    <button class="btn" onclick="copyToClipboard('{{webhook_url}}')">复制URL</button>
+</div>
+
+<div class="card">
+    <h3>新的API Token</h3>
+    <p><code>{{api_token}}</code></p>
+    <p class="alert alert-warning">请保存此Token！出于安全考虑，此Token仅会显示一次。</p>
+    <button class="btn" onclick="copyToClipboard('{{api_token}}')">复制Token</button>
+</div>
+
+<p>
+    <a href="/admin/webhooks" class="btn">返回Webhook列表</a>
+</p>
+
+<script>
+function copyToClipboard(text) {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand('copy');
+    document.body.removeChild(textarea);
+    alert('已复制到剪贴板');
+}
+</script>''')
+
+    # 5. 配置Token重新生成模板
+    webhook_config_token_regenerated_path = os.path.join(templates_dir, 'webhook_config_token_regenerated.tpl')
+    if not os.path.exists(webhook_config_token_regenerated_path):
+        with open(webhook_config_token_regenerated_path, 'w', encoding='utf-8') as f:
+            f.write('''% rebase('layout.tpl', title='配置Token已重新生成')
+<h2>配置Token已重新生成</h2>
+
+<div class="alert alert-success">
+    <p>Webhook「{{name}}」的配置Token已成功重新生成！</p>
+    <p>用户需要使用新的配置Token重新订阅。</p>
+</div>
+
+<div class="card">
+    <h3>新的配置Token (订阅用)</h3>
+    <p><code>{{config_token}}</code></p>
+    <div class="alert alert-info">
+        新的订阅命令: <code>\subscribe-event {{config_token}}</code>
+    </div>
+    <button class="btn" onclick="copyToClipboard('{{config_token}}')">复制Token</button>
+</div>
+
+<p>
+    <a href="/admin/webhooks" class="btn">返回Webhook列表</a>
+</p>
+
+<script>
+function copyToClipboard(text) {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand('copy');
+    document.body.removeChild(textarea);
+    alert('已复制到剪贴板');
+}
+</script>''')
+
+    # 6. Webhook订阅列表模板
+    webhook_subscriptions_path = os.path.join(templates_dir, 'webhook_subscriptions.tpl')
+    if not os.path.exists(webhook_subscriptions_path):
+        with open(webhook_subscriptions_path, 'w', encoding='utf-8') as f:
+            f.write('''% rebase('layout.tpl', title='Webhook订阅列表')
+<h2>「{{webhook['name']}}」订阅列表</h2>
+<a href="/admin/webhooks" class="btn">返回Webhook列表</a>
+
+<div class="card">
+    <h3>配置Token (用于订阅)</h3>
+    <p><code>{{webhook['config_token']}}</code></p>
+    <div class="alert alert-info">
+        用户订阅命令: <code>\subscribe-event {{webhook['config_token']}}</code>
+    </div>
+</div>
+
+<h3>当前订阅 ({{len(subscriptions)}})</h3>
+
+<table>
+    <thead>
+        <tr>
+            <th>ID</th>
+            <th>类型</th>
+            <th>目标ID</th>
+            <th>创建者</th>
+            <th>创建时间</th>
+            <th>操作</th>
+        </tr>
+    </thead>
+    <tbody>
+        % for sub in subscriptions:
+        <tr>
+            <td>{{sub['id']}}</td>
+            <td>{{sub['target_type']}}</td>
+            <td>{{sub['target_id']}}</td>
+            <td>{{sub['created_by'] or '-'}}</td>
+            <td>{{sub['created_at']}}</td>
+            <td>
+                <a href="/admin/webhooks/remove-subscription/{{sub['id']}}" class="btn btn-danger" onclick="return confirm('确定要删除此订阅吗？')">删除</a>
+            </td>
+        </tr>
+        % end
+        % if not subscriptions:
+        <tr>
+            <td colspan="6" class="text-center">暂无订阅</td>
+        </tr>
+        % end
+    </tbody>
+</table>''')
+
+    # 7. Webhook日志模板
+    webhook_logs_path = os.path.join(templates_dir, 'webhook_logs.tpl')
+    if not os.path.exists(webhook_logs_path):
+        with open(webhook_logs_path, 'w', encoding='utf-8') as f:
+            f.write('''% rebase('layout.tpl', title='Webhook调用日志')
+<h2>「{{webhook['name']}}」调用日志</h2>
+<a href="/admin/webhooks" class="btn">返回Webhook列表</a>
+
+<p>显示最近100条调用记录</p>
+
+<table>
+    <thead>
+        <tr>
+            <th>ID</th>
+            <th>时间</th>
+            <th>状态</th>
+            <th>请求数据</th>
+            <th>响应</th>
+        </tr>
+    </thead>
+    <tbody>
+        % for log in logs:
+        <tr>
+            <td>{{log['id']}}</td>
+            <td>{{log['created_at']}}</td>
+            <td>{{log['status']}}</td>
+            <td>
+                <div class="log-content">{{log['request_data']}}</div>
+            </td>
+            <td>
+                <div class="log-content">{{log['response']}}</div>
+            </td>
+        </tr>
+        % end
+        % if not logs:
+        <tr>
+            <td colspan="5" class="text-center">暂无调用记录</td>
+        </tr>
+        % end
+    </tbody>
+</table>
+
+<style>
+.log-content {
+    max-height: 150px;
+    max-width: 300px;
+    overflow: auto;
+    white-space: pre-wrap;
+    font-family: monospace;
+    font-size: 12px;
+    background-color: #f5f5f5;
+    padding: 5px;
+    border-radius: 3px;
+}
+</style>''')
 
 # 数据库操作函数
 def get_db_connection():
@@ -1618,9 +2068,9 @@ def parse_command(text):
 def is_user_command(cmd):
     """检查是否是普通用户可用的命令"""
     user_commands = [
-        "help", "model-list", "model-info", "command-list", "change-model", "clear", "session-info"
+        "help", "model-list", "model-info", "command-list", "change-model", 
+        "clear", "session-info", "subscribe-event", "unsubscribe-event", "list-subscriptions"
     ]
-    # 检查命令或命令前缀是否在用户命令列表中
     return cmd in user_commands
 
 
@@ -1634,6 +2084,104 @@ def is_admin_command(cmd):
     ]
     # 检查命令或命令前缀是否在管理员命令列表中
     return cmd in admin_commands or any(cmd.startswith(prefix) for prefix in ["admin-", "model-", "command-", "ui-", "set-"])
+
+
+def handle_subscribe_event(args, sender_id, sender_type, chat_id, reply_func):
+    """处理订阅事件命令"""
+    config_token = args.strip()
+    if not config_token:
+        reply_func("请提供有效的配置令牌，例如：`\\subscribe-event abc123`")
+        return
+    
+    # 通过配置token查找webhook
+    webhook = get_webhook(config_token=config_token)
+    if not webhook:
+        reply_func(f"未找到配置令牌为 '{config_token}' 的webhook事件")
+        return
+    
+    # 确定订阅目标
+    if sender_type == "group":
+        target_type = "chat"
+        target_id = chat_id
+        target_desc = "当前群组"
+    else:
+        target_type = "user"
+        target_id = sender_id
+        target_desc = "您"
+    
+    # 添加订阅
+    success, result = add_webhook_subscription(webhook['id'], target_type, target_id, sender_id)
+    if success:
+        reply_func(f"{target_desc}已成功订阅「{webhook['name']}」事件通知")
+    else:
+        reply_func(f"订阅失败: {result}")
+
+
+def handle_unsubscribe_event(args, sender_id, sender_type, chat_id, reply_func):
+    """处理取消订阅事件命令"""
+    config_token = args.strip()
+    if not config_token:
+        reply_func("请提供有效的配置令牌，例如：`\\unsubscribe-event abc123`")
+        return
+    
+    # 通过配置token查找webhook
+    webhook = get_webhook(config_token=config_token)
+    if not webhook:
+        reply_func(f"未找到配置令牌为 '{config_token}' 的webhook事件")
+        return
+    
+    # 确定订阅目标
+    if sender_type == "group":
+        target_type = "chat"
+        target_id = chat_id
+        target_desc = "当前群组"
+    else:
+        target_type = "user"
+        target_id = sender_id
+        target_desc = "您"
+    
+    # 取消订阅
+    if remove_webhook_subscription(webhook['id'], target_type, target_id):
+        reply_func(f"{target_desc}已成功取消订阅「{webhook['name']}」事件通知")
+    else:
+        reply_func(f"{target_desc}未订阅「{webhook['name']}」事件通知")
+
+
+def handle_list_subscriptions(sender_id, reply_func):
+    """列出用户的所有订阅"""
+    subscriptions = get_user_subscriptions(sender_id)
+    
+    if not subscriptions:
+        reply_func("您当前没有任何事件订阅")
+        return
+    
+    reply_text = "## 您的事件订阅\n\n"
+    
+    # 按webhook分组显示
+    webhook_groups = {}
+    for sub in subscriptions:
+        webhook_id = sub['webhook_id']
+        if webhook_id not in webhook_groups:
+            webhook_groups[webhook_id] = {
+                'name': sub['webhook_name'],
+                'description': sub['webhook_description'],
+                'subscriptions': []
+            }
+        webhook_groups[webhook_id]['subscriptions'].append(sub)
+    
+    for webhook_id, group in webhook_groups.items():
+        reply_text += f"### {group['name']}\n"
+        if group['description']:
+            reply_text += f"{group['description']}\n"
+        
+        for sub in group['subscriptions']:
+            if sub['target_type'] == 'user':
+                target_desc = "个人"
+            else:
+                target_desc = "群组"
+            reply_text += f"- {target_desc} (创建于 {sub['created_at']})\n"
+    
+    reply_func(reply_text)
 
 
 def is_bot_mentioned(mentions):
@@ -1668,7 +2216,7 @@ def remove_mentions(text, mentions):
 
 
 # 处理系统命令
-def handle_command(cmd, args, sender_id, reply_func):
+def handle_command(cmd, args, sender_id, sender_type="user", chat_id=None, reply_func=None):
     """处理系统命令"""
     is_admin = check_admin(sender_id)
 
@@ -1705,6 +2253,15 @@ def handle_command(cmd, args, sender_id, reply_func):
         return True
     elif cmd == "session-info":
         handle_session_info(sender_id, reply_func)
+        return True
+    elif cmd == "subscribe-event":
+        handle_subscribe_event(args, sender_id, sender_type, chat_id, reply_func)
+        return True
+    elif cmd == "unsubscribe-event":
+        handle_unsubscribe_event(args, sender_id, sender_type, chat_id, reply_func)
+        return True
+    elif cmd == "list-subscriptions":
+        handle_list_subscriptions(sender_id, reply_func)
         return True
 
     # 管理员命令
@@ -1802,6 +2359,9 @@ def show_help(is_admin, reply_func):
     help_text += "- `\\change-model [模型名称]` - 切换当前对话使用的模型\n"
     help_text += "- `\\clear` - 清除当前会话历史\n"
     help_text += "- `\\session-info` - 查看当前会话状态\n"
+    help_text += "- `\\subscribe-event [配置令牌]` - 订阅事件通知\n"
+    help_text += "- `\\unsubscribe-event [配置令牌]` - 取消订阅事件通知\n"
+    help_text += "- `\\list-subscriptions` - 查看您的所有订阅\n"
 
     # 自定义命令
     commands = get_all_commands()
@@ -1825,6 +2385,10 @@ def show_help(is_admin, reply_func):
         help_text += "- `\\command-add [名称] [简介] [启动指令] [模型]` - 添加命令\n"
         help_text += "- `\\command-delete [名称]` - 删除命令\n"
         help_text += "- `\\command-update [名称] [参数] [新值]` - 更新命令\n"
+        help_text += "- `\\webhook-list` - 列出所有webhook\n"
+        help_text += "- `\\webhook-add [名称] [描述] [模型]` - 添加webhook\n"
+        help_text += "- `\\webhook-delete [ID]` - 删除webhook\n"
+        help_text += "- `\\webhook-status [ID] [启用/禁用]` - 修改webhook状态\n"
         help_text += "- `\\ui-enable` - 启用Web管理界面\n"
         help_text += "- `\\ui-disable` - 关闭Web管理界面\n"
 
@@ -2575,6 +3139,9 @@ def handle_v2_event(event_data):
         # 确定回复方式：私聊用open_id，群聊@用chat_id
         reply_id = chat_id if is_mention and chat_type == "group" else sender_id
         reply_type = "chat_id" if is_mention and chat_type == "group" else "open_id"
+        
+        # 处理消息所处的环境类型
+        sender_type = "group" if chat_type == "group" else "user"
 
         # 仅处理私聊消息或群聊中@机器人的消息
         if chat_type != "group" or (chat_type == "group" and is_mention):
@@ -2592,7 +3159,17 @@ def handle_v2_event(event_data):
 
             # 处理消息
             if msg_type == "text":
-                process_message(sender_id, text_content, reply)
+                # 检查是否为命令
+                if is_command(text_content):
+                    cmd, args = parse_command(text_content)
+                    if cmd:
+                        # 处理命令，传递聊天类型和群ID
+                        handle_command(cmd, args, sender_id, sender_type, chat_id, reply)
+                    else:
+                        # 未能解析出命令，按普通消息处理
+                        process_message(sender_id, text_content, reply)
+                else:
+                    process_message(sender_id, text_content, reply)
             else:
                 reply("目前只支持文本消息。")
 
@@ -2664,6 +3241,244 @@ def handle_v1_event(event_data):
                     reply("目前只支持文本消息。")
 
     return True
+
+
+def create_webhook(name, description, model_id, prompt_template=None):
+    """创建新的webhook，返回主token和配置token"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # 生成唯一token (用于API调用)
+    api_token = secrets.token_urlsafe(32)
+    # 生成唯一配置token (用于用户订阅)
+    config_token = secrets.token_urlsafe(8)  # 短一些便于用户使用
+    
+    cursor.execute(
+        """INSERT INTO webhooks 
+           (name, description, token, config_token, model_id, prompt_template) 
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (name, description, api_token, config_token, model_id, prompt_template)
+    )
+    conn.commit()
+    webhook_id = cursor.lastrowid
+    conn.close()
+    
+    return webhook_id, api_token, config_token
+
+
+def get_webhook(webhook_id=None, api_token=None, config_token=None):
+    """获取webhook信息，支持通过ID、API token或配置token查询"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    if webhook_id:
+        cursor.execute("""
+            SELECT w.*, m.name as model_name, m.dify_type, m.dify_url, m.api_key
+            FROM webhooks w
+            JOIN models m ON w.model_id = m.id
+            WHERE w.id = ?
+        """, (webhook_id,))
+    elif api_token:
+        cursor.execute("""
+            SELECT w.*, m.name as model_name, m.dify_type, m.dify_url, m.api_key
+            FROM webhooks w
+            JOIN models m ON w.model_id = m.id
+            WHERE w.token = ? AND w.is_active = 1
+        """, (api_token,))
+    elif config_token:
+        cursor.execute("""
+            SELECT w.*, m.name as model_name, m.dify_type, m.dify_url, m.api_key
+            FROM webhooks w
+            JOIN models m ON w.model_id = m.id
+            WHERE w.config_token = ?
+        """, (config_token,))
+    else:
+        conn.close()
+        return None
+        
+    webhook = cursor.fetchone()
+    conn.close()
+    
+    return dict(webhook) if webhook else None
+
+
+def update_webhook(webhook_id, name=None, description=None, model_id=None, 
+                  prompt_template=None, is_active=None):
+    """更新webhook"""
+    # 实现与之前类似，只是移除了target_type和target_id参数
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # 构建更新语句
+    updates = []
+    params = []
+    
+    if name is not None:
+        updates.append("name = ?")
+        params.append(name)
+    if description is not None:
+        updates.append("description = ?")
+        params.append(description)
+    if model_id is not None:
+        updates.append("model_id = ?")
+        params.append(model_id)
+    if prompt_template is not None:
+        updates.append("prompt_template = ?")
+        params.append(prompt_template)
+    if is_active is not None:
+        updates.append("is_active = ?")
+        params.append(is_active)
+        
+    updates.append("updated_at = CURRENT_TIMESTAMP")
+    
+    # 执行更新
+    if updates:
+        query = f"UPDATE webhooks SET {', '.join(updates)} WHERE id = ?"
+        params.append(webhook_id)
+        
+        cursor.execute(query, params)
+        conn.commit()
+        affected = conn.total_changes
+        conn.close()
+        
+        return affected > 0
+        
+    conn.close()
+    return False
+
+
+def regenerate_webhook_tokens(webhook_id, regen_api=True, regen_config=False):
+    """重新生成webhook的token，可以选择性重新生成API token或配置token"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    updates = []
+    params = []
+    tokens = {}
+    
+    # 生成新API token
+    if regen_api:
+        new_api_token = secrets.token_urlsafe(32)
+        updates.append("token = ?")
+        params.append(new_api_token)
+        tokens['api_token'] = new_api_token
+    
+    # 生成新配置token
+    if regen_config:
+        new_config_token = secrets.token_urlsafe(8)
+        updates.append("config_token = ?")
+        params.append(new_config_token)
+        tokens['config_token'] = new_config_token
+    
+    if not updates:
+        conn.close()
+        return False, {}
+    
+    # 更新时间戳
+    updates.append("updated_at = CURRENT_TIMESTAMP")
+    
+    # 执行更新
+    query = f"UPDATE webhooks SET {', '.join(updates)} WHERE id = ?"
+    params.append(webhook_id)
+    
+    cursor.execute(query, params)
+    conn.commit()
+    affected = conn.total_changes
+    conn.close()
+    
+    return affected > 0, tokens
+
+
+# 新增订阅相关函数
+def add_webhook_subscription(webhook_id, target_type, target_id, created_by=None):
+    """添加webhook订阅"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute(
+            """INSERT INTO webhook_subscriptions 
+               (webhook_id, target_type, target_id, created_by) 
+               VALUES (?, ?, ?, ?)""",
+            (webhook_id, target_type, target_id, created_by)
+        )
+        conn.commit()
+        subscription_id = cursor.lastrowid
+        conn.close()
+        return True, subscription_id
+    except sqlite3.IntegrityError:
+        # 唯一约束失败，表示已存在相同订阅
+        conn.close()
+        return False, "该目标已订阅此webhook"
+    except Exception as e:
+        conn.close()
+        return False, str(e)
+
+
+def remove_webhook_subscription(webhook_id, target_type, target_id):
+    """删除webhook订阅"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute(
+        """DELETE FROM webhook_subscriptions 
+           WHERE webhook_id = ? AND target_type = ? AND target_id = ?""",
+        (webhook_id, target_type, target_id)
+    )
+    conn.commit()
+    affected = conn.total_changes
+    conn.close()
+    
+    return affected > 0
+
+
+def get_webhook_subscriptions(webhook_id):
+    """获取特定webhook的所有订阅"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute(
+        """SELECT * FROM webhook_subscriptions 
+           WHERE webhook_id = ? 
+           ORDER BY created_at DESC""",
+        (webhook_id,)
+    )
+    
+    subscriptions = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    
+    return subscriptions
+
+
+def get_user_subscriptions(user_id, include_chat=True):
+    """获取用户已订阅的所有webhook"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    if include_chat:
+        # 包括用户参与的群组订阅
+        cursor.execute("""
+            SELECT ws.*, w.name as webhook_name, w.description as webhook_description
+            FROM webhook_subscriptions ws
+            JOIN webhooks w ON ws.webhook_id = w.id
+            WHERE (ws.target_type = 'user' AND ws.target_id = ?) 
+               OR (ws.created_by = ?)
+            ORDER BY ws.created_at DESC
+        """, (user_id, user_id))
+    else:
+        # 只包括用户个人订阅
+        cursor.execute("""
+            SELECT ws.*, w.name as webhook_name, w.description as webhook_description
+            FROM webhook_subscriptions ws
+            JOIN webhooks w ON ws.webhook_id = w.id
+            WHERE ws.target_type = 'user' AND ws.target_id = ?
+            ORDER BY ws.created_at DESC
+        """, (user_id,))
+    
+    subscriptions = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    
+    return subscriptions
 
 
 # Web管理界面
@@ -3047,6 +3862,302 @@ def admin_logs(user_id):
 def serve_static(filepath):
     """提供静态文件"""
     return static_file(filepath, root=STATIC_DIR)
+
+
+@app.post('/api/webhook/<token>')
+def webhook_endpoint(token):
+    """外部系统通过webhook调用机器人"""
+    try:
+        # 验证token
+        webhook = get_webhook(api_token=token)
+        if not webhook:
+            logger.warning(f"无效的webhook token: {token}")
+            return HTTPResponse(
+                status=401,
+                body=json.dumps({"error": "无效的webhook token"}),
+                headers={'Content-Type': 'application/json'}
+            )
+        
+        # 获取请求数据
+        try:
+            # 尝试解析JSON
+            body = request.body.read().decode('utf-8')
+            try:
+                data = json.loads(body)
+            except json.JSONDecodeError:
+                # 如果不是JSON，尝试解析表单数据
+                data = parse_utf8(request)
+                if not data:
+                    # 如果仍然为空，直接使用原始数据
+                    data = {"raw_content": body}
+        except Exception as e:
+            logger.error(f"解析webhook请求数据出错: {e}")
+            data = {"error": "无法解析请求数据"}
+        
+        # 记录请求
+        logger.info(f"接收到webhook调用: {webhook['name']}, 数据: {data}")
+        
+        # 获取模型信息
+        model = {
+            'id': webhook['model_id'],
+            'name': webhook['model_name'],
+            'dify_type': webhook['dify_type'],
+            'dify_url': webhook['dify_url'],
+            'api_key': webhook['api_key']
+        }
+        
+        # 准备给AI的输入
+        prompt_template = webhook['prompt_template']
+        formatted_input = format_data_for_ai(data)
+        
+        if prompt_template:
+            # 如果有自定义提示模板，使用模板格式化输入
+            query = prompt_template.replace("{data}", formatted_input)
+        else:
+            # 否则使用默认格式
+            query = f"分析以下数据:\n\n{formatted_input}"
+        
+        # 调用Dify API进行分析
+        try:
+            # 这里使用非流式响应
+            if model['dify_type'] == 'chatbot':
+                answer, _ = ask_dify_chatbot(model, query, None, "webhook", streaming=False)
+            elif model['dify_type'] == 'agent':
+                answer, _ = ask_dify_agent(model, query, None, "webhook", streaming=False)
+            elif model['dify_type'] == 'flow':
+                answer, _ = ask_dify_flow(model, query, None, "webhook", streaming=False)
+            else:
+                answer = f"不支持的模型类型: {model['dify_type']}"
+                
+            logger.info(f"AI分析结果: {answer}")
+            
+            # 获取所有订阅此webhook的目标
+            subscriptions = get_webhook_subscriptions(webhook['id'])
+            
+            if not subscriptions:
+                logger.warning(f"Webhook {webhook['name']} 没有订阅者，无法发送通知")
+                
+                # 记录调用日志
+                log_webhook_call(webhook['id'], data, answer, 200)
+                
+                return HTTPResponse(
+                    status=200,
+                    body=json.dumps({
+                        "success": True,
+                        "message": "处理成功，但没有订阅者",
+                        "answer": answer
+                    }),
+                    headers={'Content-Type': 'application/json'}
+                )
+            
+            # 发送结果到所有订阅者
+            sent_count = 0
+            for sub in subscriptions:
+                try:
+                    if sub['target_type'] == "user":
+                        # 发送给用户
+                        response = send_message(open_id=sub['target_id'], content=answer)
+                    else:
+                        # 发送给群组
+                        response = send_message(chat_id=sub['target_id'], content=answer)
+                    
+                    if response.get("code") == 0:
+                        sent_count += 1
+                except Exception as e:
+                    logger.error(f"发送消息到 {sub['target_type']}:{sub['target_id']} 失败: {e}")
+            
+            # 记录调用日志
+            log_webhook_call(webhook['id'], data, answer, 200)
+            
+            # 返回成功响应
+            return HTTPResponse(
+                status=200,
+                body=json.dumps({
+                    "success": True,
+                    "message": f"处理成功，已发送给 {sent_count}/{len(subscriptions)} 个订阅者",
+                    "answer": answer
+                }),
+                headers={'Content-Type': 'application/json'}
+            )
+            
+        except Exception as e:
+            # 记录错误日志
+            error_msg = f"处理webhook调用出错: {str(e)}"
+            logger.error(error_msg)
+            logger.error(traceback.format_exc())
+            
+            # 记录调用日志
+            log_webhook_call(webhook['id'], data, error_msg, 500)
+            
+            # 返回错误响应
+            return HTTPResponse(
+                status=500,
+                body=json.dumps({"error": error_msg}),
+                headers={'Content-Type': 'application/json'}
+            )
+            
+    except Exception as e:
+        logger.error(f"Webhook处理全局错误: {str(e)}")
+        logger.error(traceback.format_exc())
+        return HTTPResponse(
+            status=500,
+            body=json.dumps({"error": str(e)}),
+            headers={'Content-Type': 'application/json'}
+        )
+    
+
+@app.get('/admin/webhooks')
+@require_admin
+def admin_webhooks(user_id):
+    """Webhook管理页面"""
+    webhooks = get_all_webhooks()
+    return template('webhooks', webhooks=webhooks)
+
+
+@app.get('/admin/webhooks/add')
+@require_admin
+def admin_webhooks_add_form(user_id):
+    """添加Webhook表单"""
+    models = get_all_models()
+    return template('webhook_form', webhook=None, models=models, 
+                   title="添加Webhook", action="/admin/webhooks/add")
+
+
+@app.post('/admin/webhooks/add')
+@require_admin
+def admin_webhooks_add(user_id):
+    """处理添加Webhook请求"""
+    request_forms = parse_utf8(request)
+    name = ensure_utf8(request_forms.get('name'))
+    description = ensure_utf8(request_forms.get('description'))
+    model_id = request_forms.get('model_id')
+    prompt_template = ensure_utf8(request_forms.get('prompt_template'))
+    
+    if not all([name, model_id]):
+        models = get_all_models()
+        return template('webhook_form', webhook=None, models=models, 
+                       title="添加Webhook", action="/admin/webhooks/add",
+                       message="所有必填字段都必须填写", message_type="error")
+                       
+    # 创建webhook
+    webhook_id, api_token, config_token = create_webhook(name, description, model_id, prompt_template)
+    if webhook_id:
+        # 显示确认页面，包含webhook URL和token
+        webhook_url = f"{request.urlparts.scheme}://{request.urlparts.netloc}/api/webhook/{api_token}"
+        return template('webhook_created', name=name, webhook_url=webhook_url, 
+                       api_token=api_token, config_token=config_token)
+    else:
+        models = get_all_models()
+        return template('webhook_form', webhook=None, models=models, 
+                       title="添加Webhook", action="/admin/webhooks/add",
+                       message="创建Webhook失败", message_type="error")
+
+
+@app.get('/admin/webhooks/edit/<webhook_id:int>')
+@require_admin
+def admin_webhooks_edit_form(user_id, webhook_id):
+    """编辑Webhook表单"""
+    webhook = get_webhook(webhook_id=webhook_id)
+    if not webhook:
+        return redirect('/admin/webhooks')
+        
+    models = get_all_models()
+    return template('webhook_form', webhook=webhook, models=models, 
+                   title="编辑Webhook", action=f"/admin/webhooks/edit/{webhook_id}")
+
+
+@app.post('/admin/webhooks/edit/<webhook_id:int>')
+@require_admin
+def admin_webhooks_edit(user_id, webhook_id):
+    """处理编辑Webhook请求"""
+    webhook = get_webhook(webhook_id=webhook_id)
+    if not webhook:
+        return redirect('/admin/webhooks')
+        
+    request_forms = parse_utf8(request)
+    name = ensure_utf8(request_forms.get('name'))
+    description = ensure_utf8(request_forms.get('description'))
+    model_id = request_forms.get('model_id')
+    prompt_template = ensure_utf8(request_forms.get('prompt_template'))
+    is_active = 1 if request_forms.get('is_active') else 0
+    
+    if not all([name, model_id]):
+        models = get_all_models()
+        return template('webhook_form', webhook=webhook, models=models, 
+                       title="编辑Webhook", action=f"/admin/webhooks/edit/{webhook_id}",
+                       message="所有必填字段都必须填写", message_type="error")
+                       
+    # 更新webhook
+    if update_webhook(webhook_id, name, description, model_id, prompt_template, is_active):
+        return redirect('/admin/webhooks')
+    else:
+        models = get_all_models()
+        return template('webhook_form', webhook=webhook, models=models, 
+                       title="编辑Webhook", action=f"/admin/webhooks/edit/{webhook_id}",
+                       message="更新Webhook失败", message_type="error")
+
+
+@app.get('/admin/webhooks/regenerate-token/<webhook_id:int>')
+@require_admin
+def admin_webhooks_regenerate_token(user_id, webhook_id):
+    """重新生成Webhook Token"""
+    webhook = get_webhook(webhook_id=webhook_id)
+    if not webhook:
+        return redirect('/admin/webhooks')
+    
+    token_type = request.query.get('type', 'api')
+    
+    if token_type == 'api':
+        success, tokens = regenerate_webhook_tokens(webhook_id, regen_api=True, regen_config=False)
+        if success and 'api_token' in tokens:
+            webhook_url = f"{request.urlparts.scheme}://{request.urlparts.netloc}/api/webhook/{tokens['api_token']}"
+            return template('webhook_api_token_regenerated', name=webhook['name'], 
+                           webhook_url=webhook_url, api_token=tokens['api_token'])
+    elif token_type == 'config':
+        success, tokens = regenerate_webhook_tokens(webhook_id, regen_api=False, regen_config=True)
+        if success and 'config_token' in tokens:
+            return template('webhook_config_token_regenerated', name=webhook['name'], 
+                           config_token=tokens['config_token'])
+    
+    return redirect('/admin/webhooks')
+
+
+@app.get('/admin/webhooks/subscriptions/<webhook_id:int>')
+@require_admin
+def admin_webhook_subscriptions(user_id, webhook_id):
+    """查看Webhook订阅列表"""
+    webhook = get_webhook(webhook_id=webhook_id)
+    if not webhook:
+        return redirect('/admin/webhooks')
+    
+    subscriptions = get_webhook_subscriptions(webhook_id)
+    
+    return template('webhook_subscriptions', webhook=webhook, subscriptions=subscriptions)
+
+
+@app.get('/admin/webhooks/remove-subscription/<subscription_id:int>')
+@require_admin
+def admin_remove_subscription(user_id, subscription_id):
+    """管理员移除订阅"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # 获取订阅信息以便之后跳转回正确的页面
+    cursor.execute("SELECT webhook_id FROM webhook_subscriptions WHERE id = ?", (subscription_id,))
+    result = cursor.fetchone()
+    
+    if not result:
+        conn.close()
+        return redirect('/admin/webhooks')
+    
+    webhook_id = result['webhook_id']
+    
+    # 删除订阅
+    cursor.execute("DELETE FROM webhook_subscriptions WHERE id = ?", (subscription_id,))
+    conn.commit()
+    conn.close()
+    
+    return redirect(f'/admin/webhooks/subscriptions/{webhook_id}')
 
 
 # 健康检查接口
