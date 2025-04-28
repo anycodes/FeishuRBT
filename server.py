@@ -4382,3 +4382,7 @@ def main():
         # 如果没有安装waitress，则使用bottle的内置服务器，但提醒用户
         logger.warning("未检测到waitress，使用Bottle默认服务器。生产环境建议安装waitress: pip install waitress")
         app.run(host='0.0.0.0', port=8080, debug=False, server='auto')  # 尝试使用最佳可用服务器
+
+
+if __name__ == '__main__':
+    main()
