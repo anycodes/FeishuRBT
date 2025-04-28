@@ -682,10 +682,10 @@ pip install waitress
 ### 多平台支持
 
 您可以参考本项目架构，轻松扩展支持：
-1. 企业微信
-2. 钉钉
-3. Slack
-4. Discord
+1. [企业微信](./docs/extensions_guide.md#1-企业微信扩展)
+2. [钉钉](./docs/extensions_guide.md#2-钉钉扩展)
+3. [Slack](./docs/extensions_guide.md#3-slack扩展)
+4. [Discord](./docs/extensions_guide.md#4-discord扩展)
 
 ## 最佳实践/实践案例
 
