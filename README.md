@@ -643,6 +643,26 @@ pip install waitress
 3. Slack
 4. Discord
 
+## 最佳实践/实践案例
+
+- 命令 最佳实践案例：
+    - [案例1: 企业内部知识库助手](./docs/command_best_practices.md#1-企业内部知识库助手)
+    - [案例2: 多级智能客服与工单系统对接](./docs/command_best_practices.md#2-多级智能客服与工单系统对接)
+    - [案例3: 员工培训与学习助手](./docs/command_best_practices.md#3-员工培训与学习助手)
+    - [案例4: 会议记录与项目管理助手](./docs/command_best_practices.md#4-会议记录与项目管理助手)
+    - [案例5: 数据分析与业务报告生成助手](./docs/command_best_practices.md#5-数据分析与业务报告生成助手)
+    - [案例6: 开发文档与代码助手](./docs/command_best_practices.md#6-开发文档与代码助手)
+    - [案例7: 自动化市场情报收集](./docs/command_best_practices.md#7-自动化市场情报收集)
+    - [案例8: 自动化日常管理任务](./docs/command_best_practices.md#8-自动化日常管理任务)
+- Webhook 最佳实践案例：
+    - [案例1: 通过Lambda监控AWS费用异常](./docs/webhook_best_practices.md#案例1-通过lambda监控aws费用异常)
+    - [案例2: 通过Lambda监控CloudWatch异常](./docs/webhook_best_practices.md#案例2-通过lambda监控cloudwatch异常)
+    - [案例3: 通过CloudEvents触发Lambda做云事件监控](./docs/webhook_best_practices.md#案例3-通过cloudevents触发lambda做云事件监控)
+    - [案例4: 定期汇总服务健康状态](./docs/webhook_best_practices.md#案例4-定期汇总服务健康状态)
+    - [案例5: 监控数据库性能指标](./docs/webhook_best_practices.md#案例5-监控数据库性能指标)
+    - [案例6: CI/CD管道状态通知](./docs/webhook_best_practices.md#案例6-cicd管道状态通知)
+
+
 ## 📄 许可证
 
 [LICENSE](./LICENSE)
