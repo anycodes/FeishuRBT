@@ -1461,8 +1461,8 @@ def process_dify_stream(stream, session_id, user_id):
                                 logger.info(f"Agent thought: {event_json}")
                                 # 可以选择性地将思考过程也返回给用户
                                 thought = event_json.get("thought", "")
-                                if thought:
-                                    yield f"\n[Agent思考] {thought}\n"
+                                # if thought:
+                                #     yield f"\n[Agent思考] {thought}\n"
 
                             elif event_type == "message_file":
                                 # 文件事件
