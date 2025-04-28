@@ -184,7 +184,6 @@ graph TD
 - `\change-model [模型名称]` - 切换当前对话使用的模型
 - `\clear` - 清除当前会话历史
 - `\session-info` - 查看当前会话状态
-- `\webhook-list` - 查看可用的Webhook事件
 - `\subscribe-event [配置令牌]` - 订阅指定事件通知
 - `\unsubscribe-event [配置令牌]` - 取消订阅指定事件
 - `\list-subscriptions` - 查看您当前的所有订阅
@@ -203,6 +202,7 @@ graph TD
 - `\command-add [名称] [简介] [启动指令] [模型]` - 添加命令
 - `\command-delete [名称]` - 删除命令
 - `\command-update [名称] [参数] [新值]` - 更新命令
+- `\webhook-list` - 查看可用的Webhook事件
 - `\webhook-add [名称] [描述] [模型]` - 添加Webhook
 - `\webhook-delete [ID]` - 删除Webhook
 - `\webhook-status [ID] [启用/禁用]` - 修改Webhook状态
