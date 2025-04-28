@@ -2406,7 +2406,7 @@ def is_user_command(cmd):
     user_commands = [
         "help", "model-list", "model-info", "command-list", "change-model", 
         "clear", "session-info", "subscribe-event", "unsubscribe-event", "list-subscriptions",
-        "webhook-list"  # 添加webhook-list为用户命令
+        
     ]
     return cmd in user_commands
 
@@ -2417,7 +2417,7 @@ def is_admin_command(cmd):
         "admin-login", "admin-logout", "admin-add", "admin-remove",
         "model-add", "model-delete", "model-update", "set-default-model", "set-session-timeout",
         "command-add", "command-delete", "command-update",
-        "webhook-add", "webhook-delete", "webhook-status"  # 添加webhook相关管理命令
+        "webhook-list", "webhook-add", "webhook-delete", "webhook-status"  # 添加webhook相关管理命令
     ]
     # 检查命令或命令前缀是否在管理员命令列表中
     return cmd in admin_commands or any(cmd.startswith(prefix) for prefix in ["admin-", "model-", "command-", "webhook-", "set-"])
