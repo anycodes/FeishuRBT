@@ -19,7 +19,7 @@ class ImageCacheService:
         logger.info(f"图片缓存目录: {self.cache_dir}")
 
     def save_user_image_key(self, user_id, image_key):
-        """保存用户图片key到缓存"""
+        """保存用户图片key，延迟下载"""
         conn = get_db_connection()
         cursor = conn.cursor()
 
@@ -29,17 +29,71 @@ class ImageCacheService:
         # 计算过期时间
         expires_at = datetime.now() + timedelta(minutes=Config.IMAGE_CACHE_EXPIRE_MINUTES)
 
-        # 保存到数据库
+        # 保存图片key到数据库
         cursor.execute(
             """INSERT INTO image_cache (user_id, image_path, expires_at) 
                VALUES (?, ?, ?)""",
-            (user_id, image_key, expires_at)
+            (user_id, image_key, expires_at)  # 这里先存image_key
         )
         conn.commit()
         conn.close()
 
-        logger.info(f"用户 {user_id} 的图片已缓存: {image_key}")
+        logger.info(f"用户 {user_id} 的图片key已缓存: {image_key}")
         return True
+
+    def get_user_image_key(self, user_id):
+        """获取用户缓存的图片key"""
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """SELECT image_path, expires_at FROM image_cache 
+               WHERE user_id = ? AND expires_at > CURRENT_TIMESTAMP
+               ORDER BY id DESC LIMIT 1""",
+            (user_id,)
+        )
+
+        result = cursor.fetchone()
+        conn.close()
+
+        if result:
+            return result['image_path']  # 这里返回的是image_key
+
+        return None
+
+    def download_and_cache_image(self, user_id, image_key):
+        """下载图片并缓存到本地"""
+        from services.lark_service import download_image
+
+        # 下载图片
+        image_data = download_image(image_key)
+        if not image_data:
+            return None
+
+        # 保存到本地文件
+        timestamp = datetime.now()
+        image_path = os.path.join(self.cache_dir, f"{user_id}_{timestamp.timestamp()}.jpg")
+
+        try:
+            with open(image_path, 'wb') as f:
+                f.write(image_data)
+
+            # 更新数据库记录
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                """UPDATE image_cache SET image_path = ? 
+                   WHERE user_id = ? AND image_path = ?""",
+                (image_path, user_id, image_key)
+            )
+            conn.commit()
+            conn.close()
+
+            logger.info(f"图片已下载并缓存: {image_path}")
+            return image_path
+        except Exception as e:
+            logger.error(f"缓存图片失败: {e}")
+            return None
 
     def save_user_image(self, user_id, image_data):
         """保存用户图片数据到缓存"""

@@ -92,3 +92,24 @@ def send_message(open_id=None, chat_id=None, content=None):
     except Exception as e:
         logger.error(f"发送消息失败: {e}")
         return {"code": -1, "msg": str(e)}
+
+
+def download_image(image_key):
+    """从飞书下载图片"""
+    url = f"https://open.feishu.cn/open-apis/im/v1/images/{image_key}"
+    headers = {
+        "Authorization": f"Bearer {get_tenant_access_token()}"
+    }
+
+    req = urllib.request.Request(url, headers=headers)
+
+    try:
+        with urllib.request.urlopen(req) as response:
+            if response.status == 200:
+                return response.read()
+            else:
+                logger.error(f"下载图片失败: {response.status}")
+                return None
+    except Exception as e:
+        logger.error(f"下载图片出错: {e}")
+        return None

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+# !/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
 import json
@@ -86,6 +86,8 @@ def setup_lark_routes(app):
 
         except Exception as e:
             logger.error(f"处理事件出错: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
             return HTTPResponse(
                 status=500,
                 body=json.dumps({"error": str(e)}),
@@ -191,16 +193,16 @@ def handle_text_message(sender_id, text_content, chat_type, chat_id, mentions):
             logger.info(f"机器人被@，处理请求: {text_content}")
 
     # 检查是否有缓存的图片
-    cached_image = image_cache.get_user_image(sender_id)
+    cached_image_key = image_cache.get_user_image_key(sender_id)
 
     # 创建回复函数
     reply_func = create_reply_function(sender_id, chat_type, chat_id, mentions)
 
     # 仅处理私聊消息或群聊中@机器人的消息
     if chat_type != "group" or (chat_type == "group" and is_mention):
-        if cached_image:
+        if cached_image_key:
             # 有缓存图片，结合文本和图片处理
-            handle_text_with_cached_image(sender_id, text_content, cached_image, reply_func)
+            handle_text_with_cached_image(sender_id, text_content, cached_image_key, reply_func)
         else:
             # 正常文本处理
             if is_command(text_content):
@@ -227,16 +229,18 @@ def handle_image_message(sender_id, message, chat_type, chat_id):
     # 仅在私聊中处理图片，群聊需要@机器人
     if chat_type != "group":
         try:
-            # 这里需要实现图片下载和缓存逻辑
-            # 由于飞书API的图片处理比较复杂，这里先提供框架
-            image_key = json.loads(message.get("content", "{}")).get("image_key", "")
+            content_json = json.loads(message.get("content", "{}"))
+            image_key = content_json.get("image_key", "")
+
             if image_key:
-                # 缓存图片引用（实际下载可以延迟到需要时）
-                image_cache.save_user_image_key(sender_id, image_key)
-                reply_func(
-                    "我收到了您的图片！请告诉我您希望我对这张图片做什么？\n\n例如：\n- 描述图片内容\n- 翻译图片中的文字\n- 分析图片数据\n\n（此图片将在5分钟后自动清除）")
+                # 缓存图片key
+                if image_cache.save_user_image_key(sender_id, image_key):
+                    reply_func(
+                        "我收到了您的图片！请告诉我您希望我对这张图片做什么？\n\n例如：\n- 描述图片内容\n- 翻译图片中的文字\n- 分析图片数据\n- 提取图片中的信息\n\n（此图片将在5分钟后自动清除）")
+                else:
+                    reply_func("图片缓存失败，请重新发送。")
             else:
-                reply_func("抱歉，无法处理这张图片。")
+                reply_func("抱歉，无法获取图片信息。")
         except Exception as e:
             logger.error(f"处理图片消息出错: {e}")
             reply_func("处理图片时出现错误，请稍后重试。")
@@ -244,21 +248,57 @@ def handle_image_message(sender_id, message, chat_type, chat_id):
         reply_func("群聊中的图片处理需要@机器人。")
 
 
-def handle_text_with_cached_image(sender_id, text, cached_image, reply_func):
+def handle_text_with_cached_image(sender_id, text, cached_image_key, reply_func):
     """处理带缓存图片的文本消息"""
     try:
-        # 这里需要实现图片+文本的AI处理
-        # 目前先简单处理
-        reply_func(f"正在分析图片并处理您的请求：{text}")
+        reply_func("正在分析图片并处理您的请求，请稍候...")
+
+        # 下载并缓存图片
+        image_path = image_cache.download_and_cache_image(sender_id, cached_image_key)
+
+        if not image_path:
+            reply_func("抱歉，无法下载图片，请重新发送图片。")
+            image_cache.clear_user_image(sender_id)
+            return
+
+        # 获取用户会话和模型
+        from models.session import get_or_create_session, get_session_model, add_message
+
+        session_id, conversation_id = get_or_create_session(sender_id)
+        model = get_session_model(session_id)
+
+        if not model:
+            reply_func("当前没有设置默认模型，无法处理图片。请先使用 `\\change-model [模型名称]` 命令选择一个模型。")
+            image_cache.clear_user_image(sender_id)
+            return
+
+        # 添加用户消息记录（包含图片信息）
+        user_message = f"[图片] {text}"
+        add_message(session_id, sender_id, user_message, is_user=1)
+
+        # 调用图片+文本处理
+        from services.dify_service import process_image_and_text
+
+        try:
+            response = process_image_and_text(model, image_path, text, conversation_id, sender_id, session_id)
+            reply_func(response)
+        except Exception as e:
+            logger.error(f"AI处理图片+文本失败: {e}")
+            # 降级处理：只处理文本，告知用户图片信息
+            fallback_text = f"我收到了您发送的图片，您的问题是：{text}\n\n由于图片处理遇到问题，我只能根据您的文字描述来回答。"
+            from services.dify_service import process_dify_message
+            fallback_response = process_dify_message(model, fallback_text, conversation_id, sender_id, session_id)
+            reply_func(fallback_response)
 
         # 处理完后清除缓存
         image_cache.clear_user_image(sender_id)
 
-        # TODO: 实现真正的图片+文本AI处理
-
     except Exception as e:
         logger.error(f"处理图片+文本出错: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         reply_func("处理图片和文本时出现错误，请稍后重试。")
+        image_cache.clear_user_image(sender_id)
 
 
 def create_reply_function(sender_id, chat_type, chat_id, mentions):
@@ -268,10 +308,13 @@ def create_reply_function(sender_id, chat_type, chat_id, mentions):
     reply_type = "chat_id" if is_mention and chat_type == "group" else "open_id"
 
     def reply(content):
-        if reply_type == "open_id":
-            send_message(open_id=reply_id, content=content)
-        else:
-            send_message(chat_id=reply_id, content=content)
+        try:
+            if reply_type == "open_id":
+                send_message(open_id=reply_id, content=content)
+            else:
+                send_message(chat_id=reply_id, content=content)
+        except Exception as e:
+            logger.error(f"发送消息失败: {e}")
 
     return reply
 
@@ -281,26 +324,36 @@ def process_message(sender_id, content, reply_func):
     from models.session import get_or_create_session, get_session_model, add_message
     from services.dify_service import process_dify_message
 
-    # 获取用户会话
-    session_id, conversation_id = get_or_create_session(sender_id)
-    model = get_session_model(session_id)
-
-    if not model:
-        reply_func(
-            "当前没有设置默认模型，请先使用 `\\change-model [模型名称]` 命令选择一个模型，或者联系管理员设置默认模型。")
-        return True
-
-    # 添加用户消息记录
-    add_message(session_id, sender_id, content, is_user=1)
-
-    # 发送消息到Dify
-    reply_func("正在思考中，请稍候...")
-
     try:
-        full_response = process_dify_message(model, content, conversation_id, sender_id, session_id)
-        reply_func(full_response)
-        return True
+        # 获取用户会话
+        session_id, conversation_id = get_or_create_session(sender_id)
+        model = get_session_model(session_id)
+
+        if not model:
+            reply_func(
+                "当前没有设置默认模型，请先使用 `\\change-model [模型名称]` 命令选择一个模型，或者联系管理员设置默认模型。")
+            return True
+
+        # 添加用户消息记录
+        add_message(session_id, sender_id, content, is_user=1)
+
+        # 发送消息到Dify
+        reply_func("正在思考中，请稍候...")
+
+        try:
+            full_response = process_dify_message(model, content, conversation_id, sender_id, session_id)
+            reply_func(full_response)
+            return True
+        except Exception as e:
+            logger.error(f"处理消息出错: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+            reply_func(f"处理消息时出错: {str(e)}")
+            return False
+
     except Exception as e:
-        logger.error(f"处理消息出错: {str(e)}")
-        reply_func(f"处理消息时出错: {str(e)}")
+        logger.error(f"消息处理全局错误: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        reply_func("消息处理时发生意外错误，请稍后重试。")
         return False
