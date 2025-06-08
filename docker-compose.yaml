@@ -11,6 +11,5 @@ services:
       - APP_SECRET=${APP_SECRET}
       - BOT_NAME=${BOT_NAME}
     volumes:
-      - ./data:/app/data
-      - ./logs:/app/logs
+      - ./:/app
     restart: unless-stopped
