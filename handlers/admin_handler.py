@@ -17,9 +17,6 @@ from utils.helpers import parse_utf8, ensure_utf8
 
 logger = logging.getLogger(__name__)
 
-# 配置模板路径
-TEMPLATE_PATH.insert(0, 'templates')  # 将 templates 目录添加到模板搜索路径
-
 def setup_admin_routes(app):
     """设置管理界面相关路由"""
 

@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import logging
-from bottle import Bottle, run
+from bottle import Bottle, run, TEMPLATE_PATH
 from waitress import serve
 
 from config import Config
@@ -22,6 +22,9 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+# 配置模板路径
+TEMPLATE_PATH.insert(0, 'templates')  # 将 templates 目录添加到模板搜索路径
 
 # 创建Bottle应用
 app = Bottle()
