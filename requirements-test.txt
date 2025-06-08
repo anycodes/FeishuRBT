@@ -1,0 +1,6 @@
+pytest==7.4.3
+pytest-cov==4.1.0
+pytest-mock==3.11.1
+pytest-asyncio==0.21.1
+responses==0.23.3
+freezegun==1.2.2

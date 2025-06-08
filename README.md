@@ -715,6 +715,8 @@ pip install waitress
 
 欢迎通过提交Issue或Pull Request来贡献代码。我们对项目的任何改进建议都持开放态度！
 
+如果您想在当前项目进行二次开发可以参考[开发者文档](./docs/dev.md)。
+
 ## 🔄 更新日志
 
 ### v1.1.0
