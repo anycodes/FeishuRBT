@@ -1,6 +1,11 @@
-FROM python:3.9-slim
+FROM python:3.9
 
 WORKDIR /app
+
+# 国内镜像源
+RUN echo "deb http://mirrors.aliyun.com/debian/ bookworm main non-free contrib" > /etc/apt/sources.list && \
+    echo "deb http://mirrors.aliyun.com/debian-security/ bookworm-security main" >> /etc/apt/sources.list && \
+    echo "deb http://mirrors.aliyun.com/debian/ bookworm-updates main non-free contrib" >> /etc/apt/sources.list \
 
 # 只安装必要的系统依赖
 RUN apt-get update && apt-get install -y \

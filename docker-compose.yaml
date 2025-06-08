@@ -4,13 +4,12 @@ services:
   lark-dify-bot:
     build: .
     ports:
-      - "8080:8080"
+      - "${PORT:8080}:8080"
     environment:
       - VERIFICATION_TOKEN=${VERIFICATION_TOKEN}
       - APP_ID=${APP_ID}
       - APP_SECRET=${APP_SECRET}
       - BOT_NAME=${BOT_NAME}
-      - BOT_OPEN_ID=${BOT_OPEN_ID}
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
