@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+# !/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
 import os
@@ -39,6 +39,30 @@ def parse_utf8(request):
             value = urllib.parse.unquote_plus(value)
             form_data[key] = value
     return form_data
+
+
+def clean_command_args(args_text):
+    """清理命令参数中的@信息，只保留第一个token"""
+    if not args_text:
+        return ""
+
+    # 移除@开头的所有内容（包括@_user_数字格式）
+    cleaned = re.sub(r'@\S+', '', args_text).strip()
+
+    # 如果清理后为空，则取第一个单词
+    if not cleaned:
+        words = args_text.split()
+        if words:
+            # 取第一个不是@开头的单词
+            for word in words:
+                if not word.startswith('@'):
+                    return word
+
+    # 取第一个单词作为token（通常token是第一个参数）
+    if cleaned:
+        return cleaned.split()[0]
+
+    return ""
 
 
 def is_markdown(text):
@@ -99,6 +123,8 @@ def remove_mentions_improved(text, mentions):
             for pattern in patterns:
                 cleaned_text = cleaned_text.replace(pattern, "")
 
+    # 移除@_user_数字格式
+    cleaned_text = re.sub(r'@_user_\d+', '', cleaned_text)
     # 清理多余的空格
     cleaned_text = re.sub(r'\s+', ' ', cleaned_text).strip()
     return cleaned_text
@@ -269,3 +295,4 @@ def init_static_dir():
     os.makedirs(templates_dir, exist_ok=True)
 
     logger.info("静态文件目录初始化完成")
+
