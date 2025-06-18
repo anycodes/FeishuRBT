@@ -680,7 +680,7 @@ pip install waitress
 
 ### 多平台支持
 
-您可以参考本项目架构，轻松扩展支持：
+您可以参考本项目架构，轻松扩展支持（以下案例未经验证，需要测试和开发，只提供大体思路）：
 1. [企业微信](./docs/extensions_guide.md#1-企业微信扩展)
 2. [钉钉](./docs/extensions_guide.md#2-钉钉扩展)
 3. [Slack](./docs/extensions_guide.md#3-slack扩展)
