@@ -1,5 +1,8 @@
 # Dify飞书机器人 - 完整使用指南
 
+> 这里还有一个官方团队的机器人，也可以使用，相对来讲没有Dify可能更轻量一些：https://github.com/JustinTanCQ/im-with-qcli     
+> 相对应的官方博客地址：https://aws.amazon.com/cn/blogs/china/amazon-q-developer-cli-and-lark-building-a-conversational-ai-agent-intelligent-platform/
+
 这是一个将Dify AI应用快速对接到飞书的机器人项目，支持对接不同类型的Dify应用（聊天机器人、Agent、Flow），实现在飞书中与AI应用进行交互。
 
 ## 📋 功能特点
